@@ -231,6 +231,7 @@ def test_stiffness_travels_with_its_spring(spring_mass_warp, spring_io):
         torch.tensor(springs[perm]),
         torch.tensor(rest[perm]),
         num_vertices=len(x),
+        vertices=torch.tensor(x),
     )
     assert status == spring_io.SAVED
     restored = simulate(
