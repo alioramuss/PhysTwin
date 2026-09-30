@@ -2,7 +2,7 @@ from qqtt.data import RealData, SimpleData
 from qqtt.utils import logger, visualize_pc, cfg
 from qqtt.utils.spring_io import (
     spring_topology_state,
-    resolve_spring_topology,
+    ConfigSpringTopology,
     LEGACY,
     MATCH,
 )
@@ -125,6 +125,15 @@ class InvPhyTrainerWarp:
             controller_max_neighbours=cfg.controller_max_neighbours,
             mask=self.init_masks,
         )
+        # Immutable copy of the topology rebuilt from the config. Checkpoints
+        # are always resolved against this, never against springs taken from
+        # a previously loaded checkpoint
+        self._config_topology = ConfigSpringTopology(
+            self.init_springs,
+            self.init_rest_lengths,
+            self.num_object_springs,
+            self.init_vertices,
+        )
 
         self._build_simulator()
 
@@ -195,30 +204,34 @@ class InvPhyTrainerWarp:
     def _load_checkpoint_springs(self, checkpoint):
         # Use the spring topology saved in the checkpoint when there is one, so
         # each learned spring_Y stays attached to the spring it was trained on.
-        # Older checkpoints have no saved topology and keep the rebuilt springs.
-        springs, rest_lengths, status = resolve_spring_topology(
-            checkpoint,
-            self.init_springs,
-            self.init_rest_lengths,
-            self.simulator.n_vertices,
+        # Older checkpoints have no saved topology and use the springs rebuilt
+        # from the config, even if an earlier checkpoint replaced them.
+        springs, rest_lengths, num_object_springs, status = (
+            self._config_topology.resolve(checkpoint)
         )
         if status == LEGACY:
             logger.info(
                 "Checkpoint has no saved springs, using springs rebuilt from the config"
             )
-            return
-        if status == MATCH:
+        elif status == MATCH:
             logger.info("Saved springs match the springs rebuilt from the config")
-            return
-        logger.warning(
-            f"Springs rebuilt from the config ({len(self.init_springs)}) differ from "
-            f"the springs saved in the checkpoint ({len(springs)}), "
-            "rebuilding the simulator with the saved springs"
+        else:
+            logger.warning(
+                f"Springs rebuilt from the config ({self._config_topology.num_springs}) "
+                f"differ from the springs saved in the checkpoint ({len(springs)}), "
+                "using the saved springs"
+            )
+
+        unchanged = (
+            springs.shape == self.init_springs.shape
+            and torch.equal(springs, self.init_springs)
+            and torch.equal(rest_lengths, self.init_rest_lengths)
         )
         self.init_springs = springs
         self.init_rest_lengths = rest_lengths
-        self.num_object_springs = checkpoint["num_object_springs"]
-        self._build_simulator()
+        self.num_object_springs = num_object_springs
+        if not unchanged:
+            self._build_simulator()
 
     def _init_start(
         self,
