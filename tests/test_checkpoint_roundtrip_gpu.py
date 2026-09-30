@@ -12,7 +12,8 @@ checkpoint produces today:
   2. a checkpoint whose springs, rest lengths and spring_Y are all stored in a
      shuffled order reproduces it up to float summation order, which only works
      if loading really uses the saved springs
-  3. legacy checkpoints still take the old path unchanged
+  3. legacy checkpoints still take the old path unchanged, including on a
+     trainer that has already loaded a checkpoint with different springs
 """
 
 import glob
@@ -147,3 +148,11 @@ def test_released_checkpoint_round_trip(tmp_path):
     assert torch.equal(trainer_s.init_springs.cpu(), springs[perm])
     # Warp's atomic adds are not order deterministic on GPU, so allow float noise
     np.testing.assert_allclose(shuffled_traj, reference, atol=1e-3)
+
+    # 3. The same trainer then loads the legacy checkpoint: it must go back to
+    # the springs rebuilt from the config, not keep the shuffled ones it loaded
+    # last, and reproduce the reference exactly
+    load_like_test(trainer_s, released[0])
+    assert torch.equal(trainer_s.init_springs.cpu(), springs)
+    assert torch.equal(trainer_s.init_rest_lengths.cpu(), rest_lengths)
+    np.testing.assert_allclose(rollout(trainer_s), reference, atol=1e-5)
